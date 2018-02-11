@@ -33,7 +33,8 @@
 #define CHUNK_TYPE_DONT_CARE        0xCAC3
 #define CHUNK_TYPE_CRC32            0xCAC4
 
-#define FILL_BUF_SIZE               1024
+#define FILL_BUF_SIZE               (16 * 1024 * 1024)
+#define SPARSE_BLOCK_SIZE           4096
 
 #define IS_DEVICE_PATH_NODE(node,type,subtype) (((node)->Type == (type)) && ((node)->SubType == (subtype)))
 
@@ -180,14 +181,35 @@ FlashSparseImage (
   )
 {
   EFI_STATUS        Status = EFI_SUCCESS;
-  UINTN             Chunk, Offset = 0, Left, Count;
+  UINTN             Chunk, Offset = 0, Left, Count, FillBufSize;
   VOID             *Image;
   CHUNK_HEADER     *ChunkHeader;
-  UINT32            FillBuf[FILL_BUF_SIZE];
+  VOID             *FillBuf;
   CHAR16            OutputString[FASTBOOT_STRING_MAX_LENGTH];
 
   Image = (VOID *)SparseHeader;
   Image += SparseHeader->FileHeaderSize;
+
+  // allocate the fill buf with dynamic size
+  FillBufSize = FILL_BUF_SIZE;
+  while (FillBufSize >= SPARSE_BLOCK_SIZE) {
+    FillBuf = AllocatePool (FillBufSize);
+    if (FillBuf == NULL) {
+      FillBufSize = FillBufSize >> 1;
+    } else {
+      break;
+    }
+  };
+  if (FillBufSize < SPARSE_BLOCK_SIZE) {
+    UnicodeSPrint (
+      OutputString,
+      sizeof (OutputString),
+      L"Fail to allocate the fill buffer\n"
+      );
+    mTextOut->OutputString (mTextOut, OutputString);
+    return EFI_BUFFER_TOO_SMALL;
+  }
+
   for (Chunk = 0; Chunk < SparseHeader->TotalChunks; Chunk++) {
     ChunkHeader = (CHUNK_HEADER *)Image;
     DEBUG ((DEBUG_INFO, "Chunk #%d - Type: 0x%x Size: %d TotalSize: %d Offset %d\n",
@@ -211,8 +233,8 @@ FlashSparseImage (
     case CHUNK_TYPE_FILL:
       Left = ChunkHeader->ChunkSize * SparseHeader->BlockSize;
       while (Left > 0) {
-        if (Left > FILL_BUF_SIZE * sizeof (UINT32)) {
-          Count = FILL_BUF_SIZE * sizeof (UINT32);
+        if (Left > FILL_BUF_SIZE) {
+          Count = FILL_BUF_SIZE;
         } else {
           Count = Left;
         }
@@ -245,6 +267,7 @@ FlashSparseImage (
       break;
     }
   }
+  FreePool ((VOID *)FillBuf);
   return Status;
 }
 
