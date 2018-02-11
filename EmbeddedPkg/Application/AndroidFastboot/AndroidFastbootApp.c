@@ -180,7 +180,7 @@ FlashSparseImage (
   )
 {
   EFI_STATUS        Status = EFI_SUCCESS;
-  UINTN             Chunk, Offset = 0, Index;
+  UINTN             Chunk, Offset = 0, Left, Count;
   VOID             *Image;
   CHUNK_HEADER     *ChunkHeader;
   UINT32            FillBuf[FILL_BUF_SIZE];
@@ -209,20 +209,27 @@ FlashSparseImage (
       Offset += ChunkHeader->ChunkSize * SparseHeader->BlockSize;
       break;
     case CHUNK_TYPE_FILL:
-      SetMem32 (FillBuf, FILL_BUF_SIZE * sizeof (UINT32), *(UINT32 *)Image);
-      Image += sizeof (UINT32);
-      for (Index = 0; Index < ChunkHeader->ChunkSize; Index++) {
+      Left = ChunkHeader->ChunkSize * SparseHeader->BlockSize;
+      while (Left > 0) {
+        if (Left > FILL_BUF_SIZE * sizeof (UINT32)) {
+          Count = FILL_BUF_SIZE * sizeof (UINT32);
+        } else {
+          Count = Left;
+        }
+        SetMem32 (FillBuf, Count, *(UINT32 *)Image);
         Status = mPlatform->FlashPartitionEx (
                               PartitionName,
                               Offset,
-                              SparseHeader->BlockSize,
+                              Count,
                               FillBuf
                               );
         if (EFI_ERROR (Status)) {
           return Status;
         }
-        Offset += SparseHeader->BlockSize;
+        Offset += Count;
+        Left = Left - Count;
       }
+      Image += sizeof (UINT32);
       break;
     case CHUNK_TYPE_DONT_CARE:
       Offset += ChunkHeader->ChunkSize * SparseHeader->BlockSize;
