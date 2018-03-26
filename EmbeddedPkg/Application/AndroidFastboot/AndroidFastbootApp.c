@@ -21,6 +21,7 @@
 #include <Library/BaseMemoryLib.h>
 #include <Library/PcdLib.h>
 #include <Library/PrintLib.h>
+#include <Library/TimerLib.h>
 #include <Library/UefiApplicationEntryPoint.h>
 #include <Library/UefiBootServicesTableLib.h>
 #include <Library/UefiRuntimeServicesTableLib.h>
@@ -439,6 +440,7 @@ AcceptCmd (
       }
     }
     SEND_LITERAL ("OKAY");
+    MicroSecondDelay (3000000);
     gRT->ResetSystem (EfiResetCold, EFI_SUCCESS, 0, NULL);
 
     // Shouldn't get here
