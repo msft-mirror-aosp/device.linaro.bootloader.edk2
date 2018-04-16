@@ -1195,6 +1195,7 @@ UfsRwFlags (
   ASSERT (QueryResp != NULL);
   CmdDescSize = Trd->RuO * sizeof (UINT32) + Trd->RuL * sizeof (UINT32);
 
+  MicroSecondDelay (100000);
   //
   // Start to execute the transfer request.
   //
@@ -1362,6 +1363,7 @@ UfsExecNopCmds (
   ASSERT (NopInUpiu != NULL);
   CmdDescSize = Trd->RuO * sizeof (UINT32) + Trd->RuL * sizeof (UINT32);
 
+  MicroSecondDelay (100000);
   //
   // Start to execute the transfer request.
   //
