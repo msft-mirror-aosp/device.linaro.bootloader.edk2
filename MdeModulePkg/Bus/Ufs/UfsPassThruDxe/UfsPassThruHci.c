@@ -811,12 +811,14 @@ UfsStartExecCmd (
   UINT32        Data;
   EFI_STATUS    Status;
 
-  Status = UfsMmioRead32 (Private, UFS_HC_UTRLRSR_OFFSET, &Data);
-  if (EFI_ERROR (Status)) {
-    return Status;
-  }
-
-  if ((Data & UFS_HC_UTRLRSR) != UFS_HC_UTRLRSR) {
+  for (;;) {
+    Status = UfsMmioRead32 (Private, UFS_HC_UTRLRSR_OFFSET, &Data);
+    if (EFI_ERROR (Status)) {
+      return Status;
+    }
+    if ((Data & UFS_HC_UTRLRSR) == UFS_HC_UTRLRSR) {
+      break;
+    }
     Status = UfsMmioWrite32 (Private, UFS_HC_UTRLRSR_OFFSET, UFS_HC_UTRLRSR);
     if (EFI_ERROR (Status)) {
       return Status;
@@ -1195,7 +1197,6 @@ UfsRwFlags (
   ASSERT (QueryResp != NULL);
   CmdDescSize = Trd->RuO * sizeof (UINT32) + Trd->RuL * sizeof (UINT32);
 
-  MicroSecondDelay (100000);
   //
   // Start to execute the transfer request.
   //
@@ -1363,7 +1364,6 @@ UfsExecNopCmds (
   ASSERT (NopInUpiu != NULL);
   CmdDescSize = Trd->RuO * sizeof (UINT32) + Trd->RuL * sizeof (UINT32);
 
-  MicroSecondDelay (100000);
   //
   // Start to execute the transfer request.
   //
