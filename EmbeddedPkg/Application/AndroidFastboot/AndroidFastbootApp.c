@@ -14,21 +14,19 @@
 
 #include <Protocol/AndroidFastbootTransport.h>
 #include <Protocol/AndroidFastbootPlatform.h>
-#include <Protocol/BlockIo.h>
-#include <Protocol/DevicePathFromText.h>
 #include <Protocol/SimpleTextOut.h>
 #include <Protocol/SimpleTextIn.h>
 
 #include <Library/AbootimgLib.h>
 #include <Library/BaseMemoryLib.h>
-#include <Library/DevicePathLib.h>
 #include <Library/PcdLib.h>
 #include <Library/PrintLib.h>
+#include <Library/TimerLib.h>
 #include <Library/UefiApplicationEntryPoint.h>
 #include <Library/UefiBootServicesTableLib.h>
 #include <Library/UefiRuntimeServicesTableLib.h>
 
-#define ANDROID_FASTBOOT_VERSION "0.6"
+#define ANDROID_FASTBOOT_VERSION    "0.7"
 
 #define SPARSE_HEADER_MAGIC         0xED26FF3A
 #define CHUNK_TYPE_RAW              0xCAC1
@@ -36,7 +34,8 @@
 #define CHUNK_TYPE_DONT_CARE        0xCAC3
 #define CHUNK_TYPE_CRC32            0xCAC4
 
-#define FILL_BUF_SIZE               1024
+#define FILL_BUF_SIZE               (16 * 1024 * 1024)
+#define SPARSE_BLOCK_SIZE           4096
 
 #define IS_DEVICE_PATH_NODE(node,type,subtype) (((node)->Type == (type)) && ((node)->SubType == (subtype)))
 
@@ -183,14 +182,35 @@ FlashSparseImage (
   )
 {
   EFI_STATUS        Status = EFI_SUCCESS;
-  UINTN             Chunk, Offset = 0, Index;
+  UINTN             Chunk, Offset = 0, Left, Count, FillBufSize;
   VOID             *Image;
   CHUNK_HEADER     *ChunkHeader;
-  UINT32            FillBuf[FILL_BUF_SIZE];
+  VOID             *FillBuf;
   CHAR16            OutputString[FASTBOOT_STRING_MAX_LENGTH];
 
   Image = (VOID *)SparseHeader;
   Image += SparseHeader->FileHeaderSize;
+
+  // allocate the fill buf with dynamic size
+  FillBufSize = FILL_BUF_SIZE;
+  while (FillBufSize >= SPARSE_BLOCK_SIZE) {
+    FillBuf = AllocatePool (FillBufSize);
+    if (FillBuf == NULL) {
+      FillBufSize = FillBufSize >> 1;
+    } else {
+      break;
+    }
+  };
+  if (FillBufSize < SPARSE_BLOCK_SIZE) {
+    UnicodeSPrint (
+      OutputString,
+      sizeof (OutputString),
+      L"Fail to allocate the fill buffer\n"
+      );
+    mTextOut->OutputString (mTextOut, OutputString);
+    return EFI_BUFFER_TOO_SMALL;
+  }
+
   for (Chunk = 0; Chunk < SparseHeader->TotalChunks; Chunk++) {
     ChunkHeader = (CHUNK_HEADER *)Image;
     DEBUG ((DEBUG_INFO, "Chunk #%d - Type: 0x%x Size: %d TotalSize: %d Offset %d\n",
@@ -212,20 +232,27 @@ FlashSparseImage (
       Offset += ChunkHeader->ChunkSize * SparseHeader->BlockSize;
       break;
     case CHUNK_TYPE_FILL:
-      SetMem32 (FillBuf, FILL_BUF_SIZE * sizeof (UINT32), *(UINT32 *)Image);
-      Image += sizeof (UINT32);
-      for (Index = 0; Index < ChunkHeader->ChunkSize; Index++) {
+      Left = ChunkHeader->ChunkSize * SparseHeader->BlockSize;
+      while (Left > 0) {
+        if (Left > FILL_BUF_SIZE) {
+          Count = FILL_BUF_SIZE;
+        } else {
+          Count = Left;
+        }
+        SetMem32 (FillBuf, Count, *(UINT32 *)Image);
         Status = mPlatform->FlashPartitionEx (
                               PartitionName,
                               Offset,
-                              SparseHeader->BlockSize,
+                              Count,
                               FillBuf
                               );
         if (EFI_ERROR (Status)) {
           return Status;
         }
-        Offset += SparseHeader->BlockSize;
+        Offset += Count;
+        Left = Left - Count;
       }
+      Image += sizeof (UINT32);
       break;
     case CHUNK_TYPE_DONT_CARE:
       Offset += ChunkHeader->ChunkSize * SparseHeader->BlockSize;
@@ -241,6 +268,7 @@ FlashSparseImage (
       break;
     }
   }
+  FreePool ((VOID *)FillBuf);
   return Status;
 }
 
@@ -323,115 +351,12 @@ HandleErase (
 }
 
 STATIC
-EFI_STATUS
-BootImageWithKernel (
-  IN VOID                             *Kernel,
-  IN UINTN                            KernelSize
-  )
-{
-  EFI_STATUS                          Status;
-  CHAR16                              *BootPathStr;
-  EFI_DEVICE_PATH_FROM_TEXT_PROTOCOL  *EfiDevicePathFromTextProtocol;
-  EFI_DEVICE_PATH                     *DevicePath;
-  EFI_DEVICE_PATH_PROTOCOL            *Node, *NextNode;
-  EFI_BLOCK_IO_PROTOCOL               *BlockIo;
-  UINT32                              MediaId, BlockSize;
-  VOID                                *Buffer;
-  EFI_HANDLE                          Handle;
-  UINTN                               Size;
-
-  BootPathStr = (CHAR16 *)PcdGetPtr (PcdAndroidBootDevicePath);
-  ASSERT (BootPathStr != NULL);
-  Status = gBS->LocateProtocol (&gEfiDevicePathFromTextProtocolGuid, NULL, (VOID **)&EfiDevicePathFromTextProtocol);
-  ASSERT_EFI_ERROR(Status);
-  DevicePath = (EFI_DEVICE_PATH *)EfiDevicePathFromTextProtocol->ConvertTextToDevicePath (BootPathStr);
-  ASSERT (DevicePath != NULL);
-
-  /* Find DevicePath node of Partition */
-  NextNode = DevicePath;
-  while (1) {
-    Node = NextNode;
-    if (IS_DEVICE_PATH_NODE (Node, MEDIA_DEVICE_PATH, MEDIA_HARDDRIVE_DP)) {
-      break;
-    }
-    NextNode = NextDevicePathNode (Node);
-  }
-
-  Status = gBS->LocateDevicePath (&gEfiDevicePathProtocolGuid, &DevicePath, &Handle);
-  if (EFI_ERROR (Status)) {
-    return Status;
-  }
-
-  Status = gBS->OpenProtocol (
-                  Handle,
-                  &gEfiBlockIoProtocolGuid,
-                  (VOID **) &BlockIo,
-                  gImageHandle,
-                  NULL,
-                  EFI_OPEN_PROTOCOL_GET_PROTOCOL
-                  );
-  if (EFI_ERROR (Status)) {
-    DEBUG ((EFI_D_ERROR, "Failed to get BlockIo: %r\n", Status));
-    return Status;
-  }
-
-  MediaId = BlockIo->Media->MediaId;
-  BlockSize = BlockIo->Media->BlockSize;
-  Buffer = AllocatePages (1);
-  if (Buffer == NULL) {
-    return EFI_BUFFER_TOO_SMALL;
-  }
-  /* Load header of boot.img */
-  Status = BlockIo->ReadBlocks (
-                      BlockIo,
-                      MediaId,
-                      0,
-                      BlockSize,
-                      Buffer
-                      );
-  if (EFI_ERROR (Status)) {
-    return Status;
-  }
-  Status = AbootimgGetImgSize (Buffer, &Size);
-  if (EFI_ERROR (Status)) {
-    DEBUG ((EFI_D_ERROR, "Failed to get Abootimg Size: %r\n", Status));
-    return Status;
-  }
-  Size = ALIGN (Size, BlockSize);
-  FreePages (Buffer, 1);
-
-  /* Both PartitionStart and PartitionSize are counted as block size. */
-  Buffer = AllocatePages (EFI_SIZE_TO_PAGES (Size));
-  if (Buffer == NULL) {
-    return EFI_BUFFER_TOO_SMALL;
-  }
-
-  /* Load header of boot.img */
-  Status = BlockIo->ReadBlocks (
-                      BlockIo,
-                      MediaId,
-                      0,
-                      Size,
-                      Buffer
-                      );
-  if (EFI_ERROR (Status)) {
-    DEBUG ((EFI_D_ERROR, "Failed to read blocks: %r\n", Status));
-    goto EXIT;
-  }
-
-  Status = AbootimgBootKernel (Kernel, KernelSize, Buffer, Size);
-
-EXIT:
-  return Status;
-}
-
-STATIC
 VOID
 HandleBoot (
   VOID
   )
 {
-  EFI_STATUS Status;
+  CHAR16     *BootPathStr;
 
   mTextOut->OutputString (mTextOut, L"Booting downloaded image\r\n");
 
@@ -445,16 +370,8 @@ HandleBoot (
   // boot we lose control of the system.
   SEND_LITERAL ("OKAY");
 
-  Status = AbootimgBoot (mDataBuffer, mNumDataBytes);
-  if (EFI_ERROR (Status)) {
-    DEBUG ((EFI_D_ERROR, "Failed to boot downloaded image: %r\n", Status));
-
-    // Try to boot kernel with original boot image
-    Status = BootImageWithKernel (mDataBuffer, mNumDataBytes);
-    if (EFI_ERROR (Status)) {
-      DEBUG ((EFI_D_ERROR, "Failed to boot downloaded kernel: %r\n", Status));
-    }
-  }
+  BootPathStr = (CHAR16 *)PcdGetPtr (PcdAndroidBootDevicePath);
+  AbootimgBootRam (mDataBuffer, mNumDataBytes, BootPathStr, NULL);
   // We shouldn't get here
 }
 
@@ -523,6 +440,7 @@ AcceptCmd (
       }
     }
     SEND_LITERAL ("OKAY");
+    MicroSecondDelay (3000000);
     gRT->ResetSystem (EfiResetCold, EFI_SUCCESS, 0, NULL);
 
     // Shouldn't get here
