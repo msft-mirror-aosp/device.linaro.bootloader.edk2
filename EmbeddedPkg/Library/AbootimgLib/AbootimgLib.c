@@ -268,6 +268,7 @@ AllocateRamdisk (
 
   ASSERT (IS_POWER_OF_2 (Header->PageSize));
 
+  Status = EFI_SUCCESS;
   if (Header->RamdiskAddress && Header->RamdiskSize) {
     Address = (EFI_PHYSICAL_ADDRESS)(UINTN)Header->RamdiskAddress;
     Status = gBS->AllocatePages (
