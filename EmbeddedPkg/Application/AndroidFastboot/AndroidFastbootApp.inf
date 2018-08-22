@@ -35,7 +35,6 @@
   MemoryAllocationLib
   PcdLib
   PrintLib
-  TimerLib
   UefiApplicationEntryPoint
   UefiBootServicesTableLib
   UefiLib
