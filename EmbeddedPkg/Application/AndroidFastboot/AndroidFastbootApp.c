@@ -21,7 +21,6 @@
 #include <Library/BaseMemoryLib.h>
 #include <Library/PcdLib.h>
 #include <Library/PrintLib.h>
-#include <Library/TimerLib.h>
 #include <Library/UefiApplicationEntryPoint.h>
 #include <Library/UefiBootServicesTableLib.h>
 #include <Library/UefiRuntimeServicesTableLib.h>
@@ -228,11 +227,11 @@ FlashSparseImage (
       if (EFI_ERROR (Status)) {
         return Status;
       }
-      Image += ChunkHeader->ChunkSize * SparseHeader->BlockSize;
-      Offset += ChunkHeader->ChunkSize * SparseHeader->BlockSize;
+      Image += (UINTN)ChunkHeader->ChunkSize * SparseHeader->BlockSize;
+      Offset += (UINTN)ChunkHeader->ChunkSize * SparseHeader->BlockSize;
       break;
     case CHUNK_TYPE_FILL:
-      Left = ChunkHeader->ChunkSize * SparseHeader->BlockSize;
+      Left = (UINTN)ChunkHeader->ChunkSize * SparseHeader->BlockSize;
       while (Left > 0) {
         if (Left > FILL_BUF_SIZE) {
           Count = FILL_BUF_SIZE;
@@ -255,7 +254,7 @@ FlashSparseImage (
       Image += sizeof (UINT32);
       break;
     case CHUNK_TYPE_DONT_CARE:
-      Offset += ChunkHeader->ChunkSize * SparseHeader->BlockSize;
+      Offset += (UINTN)ChunkHeader->ChunkSize * SparseHeader->BlockSize;
       break;
     default:
       UnicodeSPrint (
@@ -440,7 +439,6 @@ AcceptCmd (
       }
     }
     SEND_LITERAL ("OKAY");
-    MicroSecondDelay (3000000);
     gRT->ResetSystem (EfiResetCold, EFI_SUCCESS, 0, NULL);
 
     // Shouldn't get here
